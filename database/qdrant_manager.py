@@ -83,6 +83,15 @@ class QdrantManager:
         except Exception as e:
             print(f"❌ Collection kontrolü hatası: {e}")
             raise
+
+    def collection_exists(self, collection_name: Optional[str] = None) -> bool:
+        """Collection var mi diye kontrol et; yoksa olusturmaz."""
+        target_collection = collection_name or self.collection_name
+        try:
+            self.client.get_collection(target_collection)
+            return True
+        except Exception:
+            return False
     
     def insert_vector(
         self,
@@ -200,7 +209,8 @@ class QdrantManager:
         query_vector: List[float],
         category: Optional[str] = None,
         limit: int = 5,
-        score_threshold: float = 0.65
+        score_threshold: float = 0.65,
+        collection_name: Optional[str] = None
     ) -> List[Tuple[Dict, float]]:
         """
         Benzer vektörleri ara
@@ -215,6 +225,11 @@ class QdrantManager:
             [(payload, score), ...] listesi
         """
         try:
+            target_collection = collection_name or self.collection_name
+            if not self.collection_exists(target_collection):
+                print(f"⚠️ Qdrant collection bulunamadı: {target_collection}")
+                return []
+
             # Kategori filtresi
             query_filter = None
             if category:
@@ -229,7 +244,7 @@ class QdrantManager:
             
             # Arama yap - Qdrant 1.17.0 API'si
             results = self.client.query_points(
-                collection_name=self.collection_name,
+                collection_name=target_collection,
                 query=query_vector,
                 query_filter=query_filter,
                 limit=limit,
@@ -239,7 +254,9 @@ class QdrantManager:
             # Sonuçları formatla
             formatted_results = []
             for result in results.points:
-                formatted_results.append((result.payload, result.score))
+                payload = dict(result.payload or {})
+                payload["_point_id"] = str(result.id)
+                formatted_results.append((payload, result.score))
             
             return formatted_results
         

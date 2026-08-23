@@ -1,0 +1,35 @@
+# ── Core PDF Parsing ──────────────────────────────────────────
+docling>=2.0.0                  # Ana parser: layout, tablo, başlık, figure caption
+docling-core>=2.0.0
+
+# ── Embedding ─────────────────────────────────────────────────
+sentence-transformers>=3.0.0    # Local embedding (GPU destekli)
+torch>=2.0.0                    # sentence-transformers backend
+
+# ── Vector Store ──────────────────────────────────────────────
+qdrant-client>=1.9.0            # Vektör arama
+
+# ── Document Store ────────────────────────────────────────────
+pymongo>=4.7.0                  # Ham chunk metadata + tam text
+
+# ── Utilities ─────────────────────────────────────────────────
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+requests>=2.31.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+loguru>=0.7.0
+numpy>=1.24.0
+
+# ── Görsel / VLM ──────────────────────────────────────────────
+transformers>=4.44.0            # VLM modelleri (LLaVA-1.6, InternVL2, Qwen2-VL)
+Pillow>=10.0.0                  # Görsel işleme
+timm>=0.9.0                     # InternVL2 bağımlılığı
+einops>=0.7.0                   # InternVL2 bağımlılığı
+
+accelerate>=0.30.0              # device_map='auto' için (LLaVA-1.6)
+
+langdetect>=1.0.9               # Dil tespiti (içerik tabanlı fallback)
+
+pymupdf>=1.23.0                 # Fallback görsel tespit (Docling picture=0 ise)
+streamlit>=1.35.0               # Web arayüzü

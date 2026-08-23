@@ -14,6 +14,13 @@ MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
 MONGODB_DB_NAME = "Ragora"
 MONGODB_COLLECTION = "web_collection"
 
+# Harici ekip projeleri ayni MongoDB/Qdrant servislerinde farkli
+# veritabani/collection olarak tutulabilir. Ana arayuz bu kaynaklari
+# "Tum Belgeler" modunda birlikte arar.
+SPOT_MONGODB_URI = os.getenv("SPOT_MONGODB_URI", MONGODB_URI)
+SPOT_MONGODB_DB_NAME = os.getenv("SPOT_MONGODB_DB_NAME", MONGODB_DB_NAME)
+SPOT_MONGODB_COLLECTION = os.getenv("SPOT_MONGODB_COLLECTION", "spot_collection")
+
 # ============================================================
 # QDRANT AYARLARI (Vector Database)
 # ============================================================
@@ -29,6 +36,7 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
 QDRANT_COLLECTION = "web_vectors"  # MongoDB: web_collection, Qdrant: web_vectors
 QDRANT_VECTOR_SIZE = 1024  # multilingual-e5-large embedding boyutu
+SPOT_QDRANT_COLLECTION = os.getenv("SPOT_QDRANT_COLLECTION", "spot_chunks")
 
 # ============================================================
 # LLM AYARLARI (LLAMA)
@@ -42,7 +50,7 @@ OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")  # Vision
 # - clip: use CLIP image embeddings against Qdrant web_images, then follow related_mongodb_id.
 # - hybrid: use deterministic CLIP image links plus a Qwen-VL caption as extra text query.
 # - qwen_caption: use only Qwen-VL caption -> text retrieval. Smaller, but less reliable.
-VISION_RETRIEVAL_MODE = os.getenv("VISION_RETRIEVAL_MODE", "clip").lower()
+VISION_RETRIEVAL_MODE = os.getenv("VISION_RETRIEVAL_MODE", "hybrid").lower()
 
 # Alternatif: HuggingFace Ã¼zerinden
 # LLAMA_MODEL = "meta-llama/Llama-2-7b-chat-hf"
@@ -84,8 +92,9 @@ QDRANT_IMAGE_COLLECTION = "web_images"
 # ============================================================
 CHUNK_SIZE = 2000  # Daha uzun chunk'lar = daha baÄŸlantÄ±lÄ± paragraflar
 CHUNK_OVERLAP = 300  # Daha fazla overlap = baÄŸlam kaybÄ± azalÄ±r
-RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "4"))  # Daha az chunk = daha hizli cevap
+RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "5"))  # Daha fazla chunk = daha zengin baglam
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.55"))
+SOURCE_DISPLAY_THRESHOLD = float(os.getenv("SOURCE_DISPLAY_THRESHOLD", "0.62"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "3500"))
 
 # ============================================================
@@ -122,6 +131,15 @@ ALLOWED_URL_PATTERNS = [
 # Manuel url listesi vermek isterseniz AUTO_DISCOVER_LINKS=False yapÄ±n
 
 CATEGORIES = {
+    # ========== TEAM PROJECTS ==========
+    "spot": {
+        "name": "Boston Dynamics Spot",
+        "description": "Spot robotu, Spot Arm, Dock, kamera ve guc kaynagi kullanim kilavuzlari",
+        "base_url": "spot-rag-project-son/spot-rag/data/pdfs",
+        "auto_discover": False,
+        "project": "spot"
+    },
+
     # ========== OUTDOOR ROBOTS ==========
     "warthog": {
         "name": "Warthog UGV",
@@ -258,13 +276,13 @@ CATEGORIES = {
 CHATBOT_PORT = 8501
 CHATBOT_TITLE = "Bilgi Asistanı"
 CHATBOT_WELCOME = """
-Merhaba! Ben UGV hakkÄ±ndaki sorularınızı yanıtlamak için buradayım.
+Merhaba! Ben ekip projelerindeki robotik dokumanlar hakkindaki sorularinizi yanitlamak icin buradayim.
 """
 
 # ============================================================
 # PROMPT ÅABLONu (TÃœRKÃ‡E)
 # ============================================================
-TURKISH_QA_PROMPT = """Sen UGV robotlari konusunda uzman teknik bir asistansin. Yalnizca verilen baglam bilgilerini kullanarak Türkiye Türkçesi ile cevap ver.
+TURKISH_QA_PROMPT = """Sen ekip projesindeki robotik dokumanlar konusunda uzman teknik bir asistansin. Clearpath UGV dokumanlari ve Boston Dynamics Spot dokumanlari dahil olmak uzere yalnizca verilen baglam bilgilerini kullanarak Türkiye Türkçesi ile cevap ver.
 Thinking mode kapali. Ic muhakeme, analiz, chain-of-thought veya <think> etiketi yazma; sadece nihai cevabi ver.
 
 Guvenlik Kurallari:
@@ -279,8 +297,14 @@ Kullanici Sorusu: {question}
 
 Kurallar:
 - Cevabi mutlaka Türkiye Türkçesi ile ver.
+- Teknik terimleri dogru cevir: charger = sarj cihazi, charging tray = sarj yuvasi, latch = mandal/kapak kilidi, contacts = temas noktalari, power outlet = priz, end-effector = uc efektor, gripper = tutucu.
 - Cevabi baglamdaki bilgilerle sinirla; baglamda olmayan model, ozellik, prosedur veya sayisal deger uydurma.
-- Soru hangi robot/urun hakkindaysa once onu net adiyla belirt.
+- Soru hangi robot/urun/proje dokumani hakkindaysa once onu net adiyla belirt.
+- Ayni niyeti tasiyan farkli ifadeleri ayni soru gibi ele al; ornegin hiz/speed/top speed, agirlik/weight/mass, calisma suresi/runtime terimleri ayni teknik ozellik grubuna isaret edebilir.
+- Kullanici sayisal bir teknik ozellik soruyorsa baglamdaki ilgili degeri ve birimini dogrudan ver; deger baglamda varsa "bilgi yok" deme.
+- Kullanici iki veya daha fazla robot/urun icin karsilastirma, ortak ozellik, fark veya sonuc soruyorsa multi-hop cevap ver: once her robot/urun icin ilgili bilgiyi baglamdan ayri ayri cikar, sonra ortak payda/fark/sonuc cikarimini yap.
+- Karsilastirma sorularinda mumkunse Markdown tablo kullan; satirlar robot/urun, sutunlar sorulan ozellikler ve kisa sonuc olsun.
+- Bir karsilastirmada bir robot/urun icin bilgi baglamda var digeri icin yoksa tum cevabi reddetme; mevcut olanlari ver, eksik olan taraf icin "bu bilgi baglamda yok" de.
 - Baglamda birden fazla benzer kaynak varsa en alakali kaynaklara odaklan, tekrar eden bilgileri yazma.
 - Teknik detaylar, prosedurler, olcumler ve guvenlik uyarilari baglamda varsa eksiksiz aktar.
 - Sorulan soruyla ilgili bağlamda tablo, kod bloğu, liste veya adim adim prosedur varsa bunlari koru ve duzenli bir sekilde sun.
@@ -289,6 +313,7 @@ Kurallar:
 - Kullanici sema/akis isterse baglamda gorsel yoksa okunabilir Markdown liste veya ASCII akis semasi kullan; gorsel/kaynak varsa ona atifla acikla.
 - Kullanici gorsel isterse veya cevap gorselle daha iyi destekleniyorsa metinde ilgili gorsellerin cevap altinda gosterilecegini belirt; URL uydurma.
 - Baglam cevabi tam desteklemiyorsa bunu acikca soyle ve emin olmadigin kismi belirt.
+- Baglam sorunun cevabini desteklemiyorsa cevabina tam olarak "Bu sorunun cevabını mevcut dokümanlarda bulamadım." cumlesiyle basla; bu durumda tahmin, genel bilgi veya kaynak atfi ekleme.
 - Kisa ama yetersiz cevap verme; gerektigi kadar detayli, duzenli ve okunabilir cevap ver.
 
 Cevap:"""

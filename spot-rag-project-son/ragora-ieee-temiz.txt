@@ -1,0 +1,492 @@
+================================================================
+RAG Destekli LLM'lerle Türkçe Soru-Cevap Sistemlerinin Geliştirilmesi
+================================================================
+
+1. Elif KOŞAR                    2. Rümeysa YURTSEVER
+   Bilgisayar Müh. Bölümü           Bilgisayar Müh. Bölümü
+   Selçuk Üniversitesi               Selçuk Üniversitesi
+   Konya, Türkiye                    Konya, Türkiye
+   0009-0009-4287-9467               0009-0002-7270-9724
+
+3. Feray Yaren TURASAY           4. Serdar KALAYCI
+   Bilgisayar Müh. Bölümü           Havelsan
+   Selçuk Üniversitesi               Ankara, Türkiye
+   Konya, Türkiye                    0000-0003-1134-5103
+   0009-0007-2021-6422
+
+5. Sema SERVİ
+   Dr. Öğr. Üyesi
+   Selçuk Üniversitesi
+   Konya, Türkiye
+   0000-0003-2069-9085
+
+----------------------------------------------------------------
+ÖZET
+----------------------------------------------------------------
+Bu çalışmada, savunma sanayii kapsamındaki teknik
+dokümantasyonlardan güvenilir bilgi erişimi sağlamak amacıyla
+çok katmanlı bir Retrieval-Augmented Generation (RAG) mimarisi
+geliştirilmiştir. Sistem; Clearpath Robotics web tabanlı
+dokümanları, Boston Dynamics Spot PDF kılavuzları ve SSB Ürün
+Katalogları olmak üzere üç farklı kaynak türünü desteklemektedir.
+Her kaynak için veri yapısına özgü ayrıştırma, parçalama ve
+gömme stratejileri tanımlanmış; metin ve görsel içerikler
+MongoDB ile Qdrant üzerinde ayrı katmanlarda depolanmıştır.
+Spot kılavuzlarında semantik arama ile anahtar kelime aramasının
+Reciprocal Rank Fusion (RRF) algoritmasıyla birleştirildiği
+hibrit retrieval yapısı, görsel ağırlıklı SSB kataloglarında ise
+CLIP tabanlı Vision RAG yaklaşımı kullanılmaktadır. Cevap
+üretimi, yerel Ollama altyapısı üzerinde çalışan Qwen tabanlı
+dil modelleriyle gerçekleştirilmektedir. Ön değerlendirmeler,
+sistemin teknik dokümanlar üzerinde Türkçe sorulara kaynak
+atıflı, kontrollü yanıtlar üretebildiğini göstermektedir.
+
+Anahtar Kelimeler—Retrieval-Augmented Generation, Büyük Dil
+Modelleri, Türkçe Soru-Cevap, Savunma Sanayii, Vektör
+Veritabanı, Multimodal Bilgi Erişimi, UGV, UAV, UMV
+
+
+----------------------------------------------------------------
+I. GİRİŞ
+----------------------------------------------------------------
+Büyük dil modelleri (LLM'ler), alan-spesifik ve güncel bilgi
+gerektiren sorularda güvenilirlik açısından önemli sınırlamalar
+barındırmaktadır [1]. Özellikle savunma sanayii gibi bilgi
+güvenliği, doğruluk ve denetlenebilirliğin kritik olduğu
+alanlarda, dış servislere bağımlı veya kontrolsüz veri
+kaynaklarına dayalı sistemler ciddi riskler oluşturmaktadır [4].
+Bu bağlamda Retrieval-Augmented Generation (RAG) yaklaşımı,
+modelin yalnızca güvenilir ve izinli kaynaklara dayalı yanıt
+üretmesini sağlayan etkili bir çözüm olarak öne çıkmaktadır
+[2], [3].
+
+Bu çalışmada, insansız kara (UGV), hava (UAV) ve deniz (UMV)
+araçlarına yönelik teknik dokümantasyonlardan Türkçe sorulara
+kaynaklı cevap üreten bir RAG sistemi geliştirilmiştir. Ön
+araştırmalar, UAV ve UMV alanında açık kaynaklı ayrıntılı
+teknik dokümantasyona erişimin sınırlı olduğunu ortaya
+koymuştur. Bu nedenle sistem geliştirme süreci; kapsamlı açık
+dokümantasyon sunan Clearpath Robotics UGV platformları ve
+Boston Dynamics Spot PDF kılavuzları üzerinde yoğunlaşmış,
+UAV/UMV kategorisi için ise SSB Ürün Katalogları görsel
+eşleştirme senaryoları kapsamında değerlendirilmiştir.
+
+Çalışmanın temel katkıları şunlardır: (i) kaynak türüne özgü
+ayrıştırma ve parçalama stratejileri içeren çok hatlı bir veri
+işleme pipeline'ı; (ii) Spot kılavuzları için semantik arama,
+anahtar kelime araması ve RRF'yi birleştiren hibrit retrieval
+yapısı; (iii) SSB katalogları için uzamsal yakınlık analizi ile
+görsel-metin eşleştirmesine dayanan Vision RAG yaklaşımı;
+(iv) tüm bileşenlerin yerel altyapıda çalıştırıldığı, dış API
+bağımlılığı bulunmayan güvenli bir sistem mimarisi.
+
+
+----------------------------------------------------------------
+II. İLGİLİ ÇALIŞMALAR
+----------------------------------------------------------------
+A. RAG Mimarileri ve LLM Güvenilirliği
+
+RAG yaklaşımı, LLM'lerin yanıt üretimini harici bilgi
+kaynaklarıyla destekleyerek halüsinasyon eğilimini azaltmayı
+ve cevap doğruluğunu artırmayı hedeflemektedir [2], [3].
+Teknik dokümantasyon yönetimi ve kurumsal bilgi erişimi
+senaryolarında RAG, statik PDF tabanlı sistemlerin getirdiği
+operasyonel verimsizlikleri giderme potansiyeli taşımaktadır
+[6].
+
+B. Multimodal Görsel Tanıma
+
+Otonom platformların bakım süreçlerinde görsel bileşen tanıma,
+geleneksel metin tabanlı katalog aramalarına kıyasla daha
+bütünsel bir bilgi erişimi sağlamaktadır [13]. CNN tabanlı
+sınıflandırma modellerinin gerçek saha koşullarındaki
+performans düşüşü [43], [44], [45], CLIP gibi multimodal
+öğrenme yaklaşımlarını ön plana çıkarmıştır [15]. CLIP,
+görsel ve metinsel verilerin ortak temsil uzayında
+öğrenilmesini sağlayarak teknik dokümantasyon ile görsel
+bileşen eşleştirmesinde kayda değer avantajlar sunmaktadır.
+
+C. Otonom Platformlarda Bilgi Yönetimi
+
+UGV, UAV ve UMV sistemlerinin artan görev karmaşıklığı,
+bakım ve lojistik süreçlerde yüksek hacimli veri üretimine yol
+açmaktadır [5], [17]. Mevcut çalışmalar kestirimci bakım,
+parça tanıma ve dokümantasyon yönetimini çoğunlukla
+birbirinden bağımsız ele almakta; uçtan uca bütünleşik çözümler
+sunmamaktadır. Bu çalışma, söz konusu boşluğu doldurmak
+amacıyla metin ve görsel destekli bütünleşik bir RAG mimarisi
+önermektedir.
+
+
+----------------------------------------------------------------
+III. SİSTEM MİMARİSİ
+----------------------------------------------------------------
+A. Genel Tasarım
+
+Önerilen sistem, dört temel bileşenden oluşmaktadır: veri
+toplama ve ayrıştırma, semantik parçalama ve embedding üretimi,
+hibrit depolama ile geri getirme ve yanıt üretimi. Ham metin ve
+metadata MongoDB'de, vektör temsilleri Qdrant'ta tutulmakta;
+kullanıcı arayüzü Streamlit ile sunulmaktadır. Cevap üretimi
+dış API bağımlılığı olmaksızın Ollama altyapısı üzerinden
+gerçekleştirilmektedir.
+
+B. Veri Kaynakları ve Doküman İşleme
+
+Sistem üç ayrı veri hattını desteklemektedir:
+
+B.1. Clearpath Robotics Web Dokümanları
+Husky, Warthog, Jackal, Ridgeback, Boxer, Dingo ve
+TurtleBot4 platformlarına ait kullanıcı kılavuzları, entegrasyon
+belgeleri ve bakım içerikleri LangChain WebBaseLoader ile
+otomatik taranmaktadır [18], [19]. Ham HTML, BeautifulSoup
+ile DOM yapısı korunarak işlenmekte; navigasyon, üstbilgi ve
+şablon bileşenleri filtrelenmektedir [20], [21]. Her içerik;
+kaynak URL, kategori, bölüm başlığı ve görsel referanslarını
+içeren zengin metadata ile etiketlenmektedir. Web görselleri
+CLIP gömme modeli ile vektörleştirilerek ilgili metin
+parçalarıyla ilişkilendirilmektedir.
+
+Parçalama: Cümle sınırı farkındalığına sahip kayan pencere
+yöntemi uygulanmakta; chunk boyutu 2000 karakter, örtüşme
+300 karakter olarak ayarlanmaktadır. Retrieval_k değeri 8'dir.
+
+B.2. Boston Dynamics Spot PDF Kılavuzları
+Spot, Spot Arm, Spot Dock, Spot Station, Spot Cam 2 ve Spot
+Şarj Ünitesi kılavuzlarından oluşan altı dokümanlık külliyat,
+Docling kütüphanesiyle layout-aware biçimde ayrıştırılmaktadır
+[16]. Docling, her elemanı section_header, text, table,
+list_item, figure_caption ve picture gibi etiketlerle
+sınıflandırmaktadır. Tablolar TableFormer modeli ile "accurate"
+modda Markdown formatına dönüştürülmektedir [4]. Sayfa
+başlıkları, altbilgiler ve dipnotlar otomatik olarak gürültü
+etiketi ile işaretlenip dışlanmaktadır.
+
+Başlık hiyerarşisi dinamik olarak izlenmekte; her eleman için
+üst başlık zinciri (breadcrumb) hesaplanmaktadır. Ayrıştırma
+sırasında Docling'in görsel etiketleri üretemediği sayfalarda
+PyMuPDF tabanlı fallback mekanizması devreye girmekte; %5
+alan eşiğini aşan görseller figür adayı olarak işaretlenmektedir.
+
+Parçalama: Bölüm sınırı farkındalıklı token tabanlı
+SemanticChunker modülü kullanılmaktadır. Parametreler:
+maksimum 512 token, 64 token örtüşme (%12,5), minimum 64
+token. Tablolar ve liste öğeleri bütünlükleri bozulmadan tek
+chunk olarak saklanmaktadır. Her chunk'a "Section:
+{breadcrumb}" veya "Table in: {breadcrumb}" prefix'i
+eklenerek embedding kalitesi artırılmaktadır. Toplam 556 metin,
+206 görsel olmak üzere 762 chunk üretilmiştir (Tablo I).
+
+Görsel içerikler için VisualParser modülü geliştirilmiştir. Her
+görsel PyMuPDF ile 200 DPI çözünürlüğünde JPEG olarak
+rasterize edilmekte, ardından Ollama üzerinden çalışan
+qwen3-vl:8b modeline gönderilmektedir. Üretilen yapılandırılmış
+açıklama, figür başlığı ve breadcrumb ile birleştirilerek CLIP
+metin encoder aracılığıyla görsel vektörüne dönüştürülmektedir.
+
+B.3. SSB Ürün Katalogları
+Savunma Sanayii Başkanlığı katalogları görsel ağırlıklı, dinamik
+metin katmanı bulunmayan PDF formatındadır [28]. Klasik
+Tesseract tabanlı yaklaşım [25], doğrusal metin akışı nedeniyle
+asimetrik sayfa düzenlerinde başlık-açıklama ilişkisini
+koparmaktadır. Bu sorun, Surya OCR ve LightOn OCR [26],
+[27] ile Koordinat Tabanlı Blok Ayrıştırma mimarisine
+geçilerek çözülmüştür. Yeni tasarımda her metin ve görsel
+bileşenin fiziksel koordinatları (x₁, y₁, x₂, y₂) çıkarılarak
+iki boyutlu uzaydaki konumlarına göre anlamsal bloklar
+oluşturulmaktadır.
+
+"Tek sayfa – tek ürün" mimarisine uygun uzamsal yakınlık
+analizi ile platform görselleri ve teknik metin blokları Öklid
+mesafeyle deterministik olarak eşleştirilmektedir. Her ürün;
+adı, platform türü, teknik özellikleri ve görsel bileşenleriyle
+birlikte tek bir semantik birim olarak temsil edilmektedir.
+Sisteme ayrıca header-footer temizleme ve üretici firma
+eşleştirme katmanları eklenmiş; böylece semantik gürültü
+azaltılmış ve firma bazlı filtreleme olanağı sağlanmıştır.
+
+C. Embedding ve Depolama
+
+Metin gömme için intfloat/multilingual-e5-large modeli (1024
+boyutlu vektör) kullanılmaktadır [32]. Bu tercih, kullanıcı
+sorgularının Türkçe, kaynak dokümanların ise İngilizce olduğu
+çapraz dil senaryolarına dayanmaktadır. mE5-large'ın prefix
+tabanlı kullanım kuralı gereği, indeksleme aşamasında chunk
+metinlerine "passage: ", sorgulama aşamasında sorguya "query: "
+prefix'i eklenmekte; işlemler batch=64 ile GPU üzerinde
+yürütülmektedir.
+
+Görsel gömme CLIP modeliyle sağlanmaktadır [15]. Clearpath
+ve SSB görsellerinde openai/clip-vit-base-patch32 (512 boyutlu),
+Spot görsellerinde teknik yoğunluk nedeniyle daha geniş varyant
+olan openai/clip-vit-large-patch14 (768 boyutlu) tercih
+edilmiştir.
+
+Depolama iki katmanlı hibrit bir mimariyle kurgulanmıştır: Ham
+metin, görsel base64 verisi ve zengin metadata MongoDB'de;
+anlamsal arama için kullanılan vektör temsilleri Qdrant'ta
+saklanmaktadır. Qdrant koleksiyonları kaynak türüne göre
+ayrılmıştır: web_vectors (metin), web_images (görsel), spot_chunks
+(metin, 1024 boyut), spot_visual_chunks (görsel, 768 boyut).
+Her Qdrant kaydı, MongoDB'deki ilgili belgeyle UUID tabanlı
+birincil anahtar üzerinden ilişkilendirilmektedir. Spot
+kılavuzlarında mükerrer indekslemeyi önlemek üzere SHA-256
+hash tabanlı DocRegistry modülü kullanılmaktadır.
+
+D. Geri Getirme ve Yanıt Üretimi
+
+Clearpath web içerikleri için sorgu vektörü, web_vectors
+koleksiyonunda kosinüs benzerliği aramasıyla değerlendirilmektedir.
+Kullanıcı arayüzünden kategori filtresi seçilmişse arama ilgili
+payload alanıyla sınırlandırılabilmektedir.
+
+Spot kılavuzları için hibrit retrieval uygulanmaktadır: Qdrant
+semantic search ile MongoDB full-text keyword search sonuçları
+RRF algoritmasıyla birleştirilmektedir (k=60) [7]. Bu yapı,
+"E-Stop nasıl kullanılır?" gibi anlamsal sorgularda semantic
+search'ün, "hata kodu" gibi spesifik terim sorgularında keyword
+search'ün güçlü yönlerinden eşzamanlı yararlanmayı
+mümkün kılmaktadır. Tablo chunk'larının embedding modeli
+tarafından zayıf temsil edilmesini telafi etmek amacıyla ilgili
+dokümanın tablo içerikleri sorgu anahtar kelimeleriyle
+eşleştirilerek sonuç listesine zorunlu olarak eklenmektedir.
+Ayrıca en yüksek skorlu chunk'ların sayfasındaki komşu
+chunk'lar bağlam zenginliği için sonuç setine dahil edilmektedir.
+
+SSB kataloglarında Vision RAG yaklaşımı uygulanmaktadır.
+Kullanıcı tarafından yüklenen görsel CLIP ile embedding'e
+dönüştürülmekte ve web_images koleksiyonunda benzer görseller
+aranmaktadır. Bulunan görsellerle ilişkili metin parçaları geri
+getirilerek cevap üretimine dahil edilmektedir. Yalnızca görsel
+açıklamasına dayalı retrieval yönteminin performansının VLM
+açıklama kalitesine aşırı bağımlı olduğu gözlemlenmiş; bu
+nedenle CLIP tabanlı image-to-image benzerlik araması temel
+yöntem olarak benimsenmiş, VLM açıklaması ise hibrit
+senaryolar için destekleyici bileşen olarak tutulmuştur.
+
+Yanıt üretiminde Ollama altyapısı üzerinde çalışan Qwen
+tabanlı modeller kullanılmaktadır [35], [36], [37], [38].
+Clearpath ve SSB sorgularında varsayılan metin modeli
+qwen2.5:7b, görsel destekli senaryolarda qwen2.5vl:7b; Spot
+sorgularında metin için qwen3.5:27b (sunucu), görsel için
+qwen3-vl:8b kullanılmaktadır. Her hatta modele yalnızca
+sağlanan bağlama dayanması ve Türkiye Türkçesiyle yanıt
+üretmesi talimatlarını içeren özel prompt yapısı uygulanmaktadır.
+
+Hibrit (metin + görsel) sorgularda VRAM taşmasını önlemek
+amacıyla sıralı model yönetimi (sequential unloading)
+uygulanmaktadır. Ollama'nın keep_alive=0 parametresi
+kullanılarak vision sorgusu öncesinde metin modeli VRAM'dan
+boşaltılmakta; görsel çıkarım tamamlandıktan sonra vision
+modeli boşaltılıp metin modeli yeniden yüklenmektedir. Bu
+yöntem, 24 GB (metin) + 6 GB (vision) eş zamanlı yüklenmesi
+durumunda oluşacak 33 GB aşım senaryosunu engellemektedir.
+
+Sayısal teknik özellik sorularında (ağırlık, boyut, hız vb.)
+tablo chunk'larının embedding benzerlik skorlarının düşük
+kalabildiği gözlemlenmiştir. Bu sorunu çözmek için
+_inject_spec_chunks mekanizması geliştirilmiştir: sorgu
+anahtar kelimeleri önceden tanımlı bir teknik terim
+sözlüğüyle (weight, mass, speed, dimension vb.) karşılaştırılmakta,
+eşleşme sağlandığında ilgili Physical Properties tablosu
+MongoDB'den doğrudan çekilerek LLM prompt'una enjekte
+edilmektedir. Bu yaklaşım, retrieval skorundan bağımsız
+olarak kritik teknik verinin modele ulaşmasını garanti
+altına almaktadır.
+
+
+----------------------------------------------------------------
+IV. UYGULAMA VE DEĞERLENDİRME
+----------------------------------------------------------------
+A. Deneysel Kurulum
+
+Sistem Python tabanlı modüler bir mimaride geliştirilmiş;
+bileşenler (veri toplama, metin retrieval, görsel retrieval,
+veritabanı yönetimi, kullanıcı arayüzü) birbirinden bağımsız
+tasarlanmıştır. Yerel geliştirme ortamında test edilen sistem,
+Docker Compose tabanlı servis mimarisiyle sunucuya taşınmıştır
+[40]. Sunucu ortamında MongoDB, Qdrant, Ollama ve Streamlit
+ayrı container servisleri olarak çalışmaktadır.
+
+Sunucu donanımı, NVIDIA H200 GPU üzerinde tanımlanmış 33 GB
+kapasiteli bir MIG (Multi-Instance GPU) dilimidir. Qwen modelleri
+GGUF formatında Q4_K_M nicemleme (quantization) ile
+kullanılmaktadır; bu sayede qwen3.5:27b (~17 GB model
+ağırlığı), KV önbelleği dahil 33 GB MIG dilimine
+sığdırılabilmektedir. Sistemin kullanıcı arayüzü Şekil 2'de
+gösterilmektedir.
+
+[Şekil 2: RAGORA Streamlit Kullanıcı Arayüzü — buraya
+ekran görüntüsü eklenecek]
+
+Tablo I. Spot kılavuzları indeksleme sonuçları
+
+| Doküman                     | Metin | Görsel | Toplam |
+|-----------------------------|-------|--------|--------|
+| Spot Ana Kılavuzu           |  185  |   92   |  277   |
+| Spot Arm Kılavuzu           |  112  |   47   |  159   |
+| Spot Dock Kılavuzu          |   68  |   21   |   89   |
+| Spot Station Kılavuzu       |   74  |   23   |   97   |
+| Spot Cam 2 Kılavuzu         |   63  |   15   |   78   |
+| Spot Şarj & Batarya Kılavuzu|   54  |    8   |   62   |
+| TOPLAM                      |  556  |  206   |  762   |
+
+B. Ön Gözlem Sonuçları
+
+Metin tabanlı sorgularda elde edilen ön gözlemler, RAG
+mimarisinin teknik dokümantasyon üzerinde Türkçe sorulara
+uygulanabilir olduğunu göstermektedir. Kullanıcıdan alınan
+Türkçe sorgular, mE5-large'ın çok dilli temsil kapasitesi
+sayesinde İngilizce kılavuz içerikleriyle başarılı biçimde
+eşleştirilmektedir.
+
+Spot kılavuzları üzerindeki örnek sorgu testlerinde hibrit
+retrieval yapısının, hem anlamsal hem de anahtar kelime bazlı
+sorgularda tutarlı sonuçlar ürettiği gözlemlenmiştir. Prosedürel
+sorgularda sistem ilgili güvenlik uyarılarını ve adım
+açıklamalarını doğru sayfa referanslarıyla geri getirebilmiş;
+sayısal değer sorularında tablo içerikleri Markdown formatında
+sunularak LLM'in tablodan doğrudan değer okuması
+sağlanmıştır.
+
+SSB kataloglarına yönelik Vision RAG denemelerinde, sisteme
+yüklenen bir platform görseli üzerinden ilgili katalog içeriğine
+ve üretici bilgisine başarılı erişim sağlanmıştır. CLIP tabanlı
+görsel benzerlik aramasının, yalnızca VLM açıklamasına dayalı
+yaklaşıma göre daha kararlı ve izlenebilir sonuçlar verdiği
+gözlemlenmiştir.
+
+Bununla birlikte, benzer görünüme sahip robot platformları veya
+donanım bileşenleri arasında görsel benzerliğin teknik bağlam
+benzerliğiyle her zaman örtüşmediği tespit edilmiştir. Görsel
+eşleşme sonuçlarının alt metin, bölüm başlığı ve yakın paragraf
+içeriği gibi metadata sinyalleriyle desteklenmesi ihtiyacı
+belirlenmiştir.
+
+Chunk boyutu, örtüşme değeri ve retrieval sayısı üzerinde
+yapılan düzenlemeler, özellikle uzun prosedürel içerikli sorularda
+cevap bağlam bütünlüğünü olumlu etkilemiştir. Ancak çok fazla
+bağlamın modele aktarılmasının alaka düzeyi düşük içeriklerden
+kaynaklanan cevap kalitesi düşüşlerine yol açabildiği
+gözlemlenmiştir.
+
+
+----------------------------------------------------------------
+V. SONUÇLAR
+----------------------------------------------------------------
+Bu çalışmada, savunma sanayii teknik dokümantasyonlarından
+Türkçe sorulara kaynaklı yanıt üreten çok modlu bir RAG
+sistemi tasarlanmış ve prototipi geliştirilmiştir. Web tabanlı,
+PDF tabanlı ve görsel ağırlıklı üç farklı kaynak türüne özgü
+veri işleme hatları, Türkçe-İngilizce çapraz dil retrieval, tablo
+içeriklerini zorunlu dahil eden hibrit geri getirme ve CLIP
+tabanlı Vision RAG mekanizmaları sistemin temel teknik
+katkılarını oluşturmaktadır. Ön değerlendirmeler, mimarinin
+metin tabanlı teknik bilgi erişiminde işlevsel bir yapıya
+ulaştığını; görsel bağlam entegrasyonunda ise önemli bir altyapı
+oluşturduğunu göstermektedir. Sistem, tamamlanmış bir nihai
+çözümden ziyade, ilerleyen çalışmalar için sağlam bir deneysel
+temel sunmaktadır.
+
+
+----------------------------------------------------------------
+VI. GELECEK ÇALIŞMALAR
+----------------------------------------------------------------
+Bir sonraki aşamada öncelikli hedef nicel performans
+değerlendirmesidir: retrieval doğruluğu, cevap kalitesi, kaynak
+uygunluğu ve görsel eşleşme başarısı Precision, Recall, MRR ve
+RAGAS framework'ü [41], [42] ile ölçülecektir. Teknik
+geliştirmeler kapsamında şu başlıklar ele alınacaktır:
+
+- Görsel-metin bağlamın birlikte değerlendirilmesi için görsel
+  benzerlik skoru ile metadata sinyallerini birleştiren yeniden
+  sıralama (re-ranking) mekanizması.
+- Sorgu türüne göre chunk boyutu, örtüşme ve top-k değerlerini
+  dinamik seçen uyarlanabilir retrieval stratejisi.
+- Cross-encoder tabanlı re-ranking ve query expansion
+  tekniklerinin entegrasyonu [3], [30].
+- Her yanıt cümlesinin kaynak chunk'ına geri iz sürülmesini
+  ve halüsinasyon tespitini sağlayan denetim bileşeni [1].
+- Periyodik veri yenileme, servis sağlık kontrolü ve yanıt
+  süresi izleme ile sistemin operasyonel sürdürülebilirliğinin
+  artırılması [40].
+
+
+----------------------------------------------------------------
+KAYNAKÇALAR
+----------------------------------------------------------------
+[1]  J. Huang et al., "A survey on hallucination in large language
+     models," arXiv:2311.05232, 2023.
+[2]  P. Lewis et al., "Retrieval-augmented generation for
+     knowledge-intensive NLP tasks," NeurIPS, vol. 33, 2020.
+[3]  Y. Gao et al., "Retrieval-augmented generation for large
+     language models: A survey," arXiv:2312.10997, 2024.
+[4]  A. Nassar et al., "TableFormer: Table structure understanding
+     with transformers," arXiv:2203.01017, 2022.
+[5]  R. W. Beard and T. W. McLain, Small Unmanned Aircraft.
+     Princeton Univ. Press, 2012.
+[6]  J. Stark, Product Lifecycle Management. Springer, 2005.
+[7]  G. V. Cormack et al., "Reciprocal rank fusion outperforms
+     Condorcet," SIGIR, 2009, pp. 758–759.
+[8]  A. Heng et al., "Rotating machinery prognostics," Mech.
+     Syst. Signal Process., vol. 23, no. 3, pp. 724–739, 2009.
+[9]  R. Yan et al., "Wavelets for fault diagnosis," Mech. Syst.
+     Signal Process., vol. 96, pp. 1–15, 2014.
+[10] M. H. M. Ghazali et al., "Comparative analysis between
+     data-driven and visual-based approach," J. Vib. Control, 2024.
+[11] I. S. D. Fragkos et al., "Intelligent data-driven prognostic
+     methodologies," Appl. Energy, vol. 254, 2019.
+[12] J. Yang et al., "Edge-intelligence-driven cooperative control
+     framework," Drones, vol. 9, no. 11, 2025.
+[13] S. S. Skiena, The Data Science Design Manual. Springer, 2017.
+[14] M. K. et al., "DeepVision: Enhanced drone detection," Sensors,
+     2023.
+[15] A. Radford et al., "Learning transferable visual models from
+     natural language supervision," ICML, 2021.
+[16] Docling Dev. Team, "Docling: An open-source document
+     conversion library," IBM Research, 2024.
+[17] G. Bekar et al., "A survey on unmanned ground vehicles,"
+     ICCMA, 2021.
+[18] Clearpath Robotics, "Clearpath Robotics documentation hub,"
+     2024. [Online]. Available: https://docs.clearpathrobotics.com/
+[19] LangChain, "WebBaseLoader documentation," 2024.
+[20] L. Richardson, "Beautiful Soup documentation," 2024.
+[21] WHATWG, "DOM standard," 2024.
+[22] Boston Dynamics, "Spot product documentation," 2024.
+[23] J. DeGroat, "pdfplumber," GitHub, 2024.
+[24] PyMuPDF Dev. Team, "PyMuPDF documentation," 2024.
+[25] R. Smith, "An overview of the Tesseract OCR engine,"
+     ICDAR, 2007, pp. 629–633.
+[26] Surya OCR, "Surya: Layout-aware OCR," GitHub, 2024.
+[27] LightOn, "LightOn OCR and document AI solutions," 2024.
+[28] Savunma Sanayii Başkanlığı, "Türk savunma sanayii ürün
+     kataloğu," 2024.
+[29] A. A. Aizawa, "An information-theoretic perspective of
+     tf-idf," Inf. Process. Manag., vol. 39, no. 1, 2003.
+[30] LangChain, "Text splitters documentation," 2024.
+[31] T. Chen et al., "Evaluating LLMs trained on code,"
+     arXiv:2107.03374, 2021.
+[32] L. Wang et al., "Text embeddings by weakly-supervised
+     contrastive pre-training," arXiv:2212.03533, 2022.
+[33] MongoDB Inc., "MongoDB documentation," 2024.
+[34] Qdrant Team, "Qdrant documentation," 2024.
+[35] Ollama, "Ollama documentation," 2024.
+[36] Qwen Team, "Qwen2.5 technical report," arXiv:2412.15115, 2024.
+[37] Qwen Team, "Qwen2.5-VL technical report," arXiv:2502.13923,
+     2025.
+[38] Qwen Team, "Qwen3 technical report," GitHub, 2025.
+[39] Streamlit, "Streamlit documentation," 2024.
+[40] Docker, "Docker Compose documentation," 2024.
+[41] Ragas Team, "Ragas: Evaluation framework for RAG," 2024.
+[42] E. Es et al., "RAGAS: Automated evaluation of RAG,"
+     arXiv:2309.15217, 2023.
+[43] K. He et al., "Deep residual learning for image recognition,"
+     CVPR, 2016, pp. 770–778.
+[44] W. Zhang et al., "Simulation-to-reality UAV fault diagnosis,"
+     arXiv:2302.04410, 2023.
+[45] W. Zhang et al., "DDCNN: A promising tool for UAV fault
+     diagnosis," arXiv:2302.08117, 2023.
+[46] Hugging Face, "Transformers documentation," 2024.
+[47] Sentence Transformers, "Sentence Transformers docs," 2024.
+[48] PyTorch, "PyTorch documentation," 2024.
+[49] Pillow Dev. Team, "Pillow documentation," 2024.

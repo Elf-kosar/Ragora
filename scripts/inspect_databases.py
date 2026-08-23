@@ -4,6 +4,11 @@ import sys
 from pathlib import Path
 from collections import Counter
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -15,14 +20,27 @@ from config.settings import (
     QDRANT_PORT,
     QDRANT_COLLECTION,
     QDRANT_IMAGE_COLLECTION,
+    SPOT_MONGODB_URI,
+    SPOT_MONGODB_DB_NAME,
+    SPOT_MONGODB_COLLECTION,
+    SPOT_QDRANT_COLLECTION,
 )
+from pymongo import MongoClient
 
 
 def qdrant_collection_info(client, name):
-    info = client.get_collection(name)
+    try:
+        info = client.get_collection(name)
+    except Exception as exc:
+        return {
+            "name": name,
+            "exists": False,
+            "error": str(exc),
+        }
     vectors = info.config.params.vectors
     return {
         "name": name,
+        "exists": True,
         "points": int(info.points_count or 0),
         "vector_size": getattr(vectors, "size", None),
         "distance": str(getattr(vectors, "distance", "")),
@@ -48,6 +66,22 @@ def main():
     print("\n=== Qdrant ===")
     for collection in [QDRANT_COLLECTION, QDRANT_IMAGE_COLLECTION]:
         print(json.dumps(qdrant_collection_info(qdrant, collection), ensure_ascii=False))
+
+    print("\n=== Spot Team Project ===")
+    spot_client = MongoClient(SPOT_MONGODB_URI)
+    spot_collection = spot_client[SPOT_MONGODB_DB_NAME][SPOT_MONGODB_COLLECTION]
+    print(f"mongo: {SPOT_MONGODB_DB_NAME}.{SPOT_MONGODB_COLLECTION}")
+    print(f"chunks: {spot_collection.count_documents({})}")
+    sample_spot = spot_collection.find_one({}, {"_id": 0, "embedding": 0})
+    if sample_spot:
+        print(json.dumps({
+            "doc_name": sample_spot.get("doc_name"),
+            "page_range": sample_spot.get("page_range"),
+            "breadcrumb_str": sample_spot.get("breadcrumb_str"),
+            "raw_text_preview": (sample_spot.get("raw_text") or sample_spot.get("text") or "")[:300],
+        }, ensure_ascii=False, indent=2))
+    print(json.dumps(qdrant_collection_info(qdrant, SPOT_QDRANT_COLLECTION), ensure_ascii=False))
+    spot_client.close()
 
     print("\n=== Sample Mongo Chunk ===")
     sample_doc = mongo.collection.find_one({"image_count": {"$gt": 0}})

@@ -6,3 +6,7 @@ __pycache__
 qdrant_storage
 ugv_knowledge_base
 data/images
+spot-rag-project-son/spot-rag/**
+!spot-rag-project-son/spot-rag/data/
+!spot-rag-project-son/spot-rag/data/pdfs/
+!spot-rag-project-son/spot-rag/data/pdfs/*.pdf

@@ -1,0 +1,428 @@
+================================================================
+RAGORA — SPOT RAG PROJESİ TEKNOLOJİ VE SİSTEM RAPORU
+================================================================
+Hazırlayan : Rümeysa Yurtsever
+Tarih       : 18 Haziran 2026
+Proje Adı   : RAGORA — Boston Dynamics Spot Teknik Dokümantasyon
+              RAG Sistemi
+Bağlam      : Selçuk Üniversitesi / Havelsan iş birliği,
+              IEEE yayını için hazırlanan akademik çalışma
+
+
+================================================================
+1. PROJE GENEL BAKIŞ
+================================================================
+
+Bu proje, Boston Dynamics Spot robotuna ait İngilizce teknik
+PDF kılavuzları üzerinde Türkçe ve İngilizce soru-cevap imkanı
+sunan çok katmanlı bir Retrieval-Augmented Generation (RAG)
+sistemidir. Sistema hem metin hem de görsel (görüntü) sorgularını
+desteklemekte; üretilen her yanıta kaynak atıfı (sayfa, belge)
+eklemektedir.
+
+Veri kaynakları:
+  - spot-user-manual-en.pdf          (ana kullanıcı kılavuzu)
+  - spot-arm-user-manual-en.pdf      (kol aksesuarı kılavuzu)
+  - spot-dock-user-manual-en.pdf     (dock istasyonu kılavuzu)
+  - spot-station-user-manual-en.pdf  (Spot Station kılavuzu)
+  - spot-cam-2-user-manual-en.pdf    (kamera aksesuarı kılavuzu)
+  - spot-power-supply-user-manual-en.pdf (güç kaynağı kılavuzu)
+
+
+================================================================
+2. MİMARİ KATMANLAR
+================================================================
+
+Sistem 5 ana katmandan oluşmaktadır:
+
+  [1] Parsing (PDF Ayrıştırma)
+  [2] Chunking (Parçalama)
+  [3] Embedding (Vektörleştirme)
+  [4] Storage / Indexing (Depolama ve İndeksleme)
+  [5] Retrieval + Generation (Sorgulama ve Yanıt Üretme)
+
+Veri akışı (indeksleme):
+  PDF → DoclingPDFParser → SemanticChunker → LocalEmbedder
+      → MongoDB (metadata + tam metin)
+      → Qdrant (vektörler)
+
+Veri akışı (sorgulama):
+  Kullanıcı sorusu → embed_query() → Qdrant semantic search
+                   → MongoDB full-text search
+                   → RRF Fusion → Top-K chunk'lar
+                   → LLM prompt → Ollama → Yanıt
+
+
+================================================================
+3. KULLANILAN TEKNOLOJİLER VE KÜTÜPHANELER
+================================================================
+
+-----------------------------------------------------------------
+3.1 PDF AYRIŞTIRICISI — Docling
+-----------------------------------------------------------------
+Kütüphane : docling >= 2.0.0 / docling-core >= 2.0.0
+Kaynak     : IBM Research
+
+Docling, PDF belgelerini düz metin olarak değil yapısal elemanlar
+(section_header, text, table, list_item, figure_caption vb.) olarak
+ayrıştırır. Öne çıkan özellikleri:
+
+  - Layout-aware ayrıştırma: Çok sütunlu sayfalarda okuma sırası
+    karışmaz.
+  - TableFormer (ML tabanlı tablo çıkarma): Tabloları satır/sütun
+    yapısıyla Markdown formatına dönüştürür. "accurate" modda
+    makine öğrenmesi modeli kullanılır.
+  - Başlık hiyerarşisi: H1/H2/H3 düzeyleri metadata olarak korunur.
+  - Breadcrumb takibi: Her metin parçası için üst başlık zinciri
+    (ör. ["Safety", "Emergency Stop Procedures"]) otomatik hesaplanır.
+  - OCR desteği: Taranan PDF'ler için isteğe bağlı açılabilir.
+
+Yedek görsel tespit (PyMuPDF / fitz):
+  Docling sıfır figure çıkardığında PyMuPDF devreye girer. Sayfadaki
+  görsel alanının sayfa alanına oranı %10 eşiğini geçiyorsa o sayfa
+  görsel chunk olarak işaretlenir. Dekoratif logo/ikon görselleri
+  bu şekilde elenir.
+
+-----------------------------------------------------------------
+3.2 SEMANTİK PARÇALAYICI — SemanticChunker
+-----------------------------------------------------------------
+Dosya : chunkers/semantic_chunker.py
+
+Docling'den gelen yapısal elemanlar bu katmanda birleştirilerek
+indekslenecek chunk'lara dönüştürülür. Çalışma prensibi:
+
+  - Başlık geçişlerinde yeni chunk açılır → bölüm sınırları korunur.
+  - Tablo chunk'ları tek başına ayrı chunk olarak saklanır.
+  - Chunk boyutu: varsayılan 1500 karakter (CHUNK_SIZE).
+  - Overlap: varsayılan 100 karakter (CHUNK_OVERLAP) — cümle sınırı
+    korunarak uygulanır.
+  - Minimum chunk boyutu: 64 karakter; daha küçükler atlanır.
+
+Her chunk'ta şu alanlar tutulur:
+  chunk_id, raw_text, text (prefix dahil), breadcrumb, page_range,
+  chunk_type (text / table / figure_caption), doc_name, lang.
+
+-----------------------------------------------------------------
+3.3 METİN EMBEDDING MODELİ — mE5-large
+-----------------------------------------------------------------
+Kütüphane : sentence-transformers >= 3.0.0 + torch >= 2.0.0
+Model     : intfloat/multilingual-e5-large (varsayılan)
+Boyut     : 1024 dim
+Parametre : 560 milyon
+Backend   : GPU (CUDA)
+
+mE5-large, 100+ dili aynı vektör uzayında temsil eder. Bu sayede
+Türkçe yazılan bir soru ile İngilizce yazılmış bir kılavuz chunk'ı
+aynı uzayda buluşabilir. Sistem 2024 MTEB multilingual benchmark'ında
+en üst sırada yer almaktadır.
+
+Prefix kuralı (mE5 için zorunlu):
+  - İndeksleme : "passage: {metin}"
+  - Sorgulama  : "query: {soru}"
+
+Alternatif desteklenen modeller (ayardan değiştirilebilir):
+  - BAAI/bge-large-en-v1.5  : 1024 dim, yalnızca İngilizce, en yüksek EN skoru
+  - BAAI/bge-base-en-v1.5   : 768 dim, daha hızlı
+  - BAAI/bge-m3             : 1024 dim, çok dilli SOTA
+
+-----------------------------------------------------------------
+3.4 GÖRSEL EMBEDDING MODELİ — CLIP
+-----------------------------------------------------------------
+Kütüphane : transformers >= 4.44.0 + Pillow >= 10.0.0
+Model     : openai/clip-vit-large-patch14
+Boyut     : 768 dim
+
+CLIP (Contrastive Language-Image Pretraining), metin ve görsel
+içerikleri aynı vektör uzayına taşır. Projede iki amaçla kullanılır:
+
+  1. Görsel chunk indexleme: VLM tarafından üretilen görsel
+     açıklamalar (description) CLIP metin encoder ile embed edilir
+     ve Qdrant'taki görsel koleksiyona yazılır.
+  2. Görsel sorgu: Kullanıcı bir görsel gönderdiğinde CLIP görsel
+     encoder ile embed edilir → görsel chunk'lar içinde cosine
+     similarity araması yapılır.
+
+Bu yapı "cross-modal retrieval" sağlar: kullanıcı metin yazarsa
+CLIP metin encoder; görsel gönderirse CLIP görsel encoder devreye
+girer, her iki sorgu türü de görsel chunk koleksiyonunu tarar.
+
+-----------------------------------------------------------------
+3.5 VİZYON DİL MODELİ (VLM)
+-----------------------------------------------------------------
+Çerçeve  : Ollama
+Model    : qwen2.5vl:7b  (.env — aktif kullanılan)
+Alternatif (yoruma alınmış): qwen3-vl:8b, qwen3.5:9b
+
+VLM'nin görevleri:
+  1. İndeksleme aşamasında her görsel chunk için otomatik açıklama
+     (description) üretmek.
+  2. Kullanıcı görsel yüklediğinde iki adımlı analiz:
+       a. Görseldeki tüm metin ve etiketleri listelemek.
+       b. Görsel içeriği (bileşen şekli, renk, bağlantı, kablo
+          yönlendirme vb.) teknik detayla tanımlamak.
+
+-----------------------------------------------------------------
+3.6 VEKTÖRVERİTABANI — Qdrant
+-----------------------------------------------------------------
+Docker image : qdrant/qdrant:v1.13.6
+Port         : 6333 (REST) / 6334 (gRPC)
+Python       : qdrant-client >= 1.9.0
+
+Qdrant, yüksek boyutlu vektörlerin saklanması ve yakın komşu
+araması (ANN) için optimize edilmiş açık kaynaklı bir vektör
+veritabanıdır. Projede iki ayrı koleksiyon bulunur:
+
+  - spot_chunks       : metin chunk vektörleri (1024 dim, mE5)
+  - spot_visual_chunks: görsel chunk vektörleri (768 dim, CLIP)
+
+Desteklenen filtreler: chunk_type, doc_name, lang — bu filtreler
+sorgu sırasında Qdrant'a payload filter olarak iletilerek gereksiz
+chunk'lar sonuç kümesinden önceden elenir.
+
+-----------------------------------------------------------------
+3.7 DÖKÜMAN STORE — MongoDB
+-----------------------------------------------------------------
+Docker image : mongo:7.0
+Port         : 27017
+Python       : pymongo >= 4.7.0
+Admin arayüzü: mongo-express:1.0.2 (port 8081)
+
+MongoDB, ham chunk metinlerini, metadata'yı ve tam metni saklar.
+Sistemdeki rolleri:
+
+  1. Ham metin deposu: chunk_id ile hızlı erişim.
+  2. Full-text search: MongoDB $text index üzerinden anahtar kelime
+     araması (hibrit retrieval'ın keyword kolu).
+  3. Görsel kayıt: VLM açıklamaları ve base64 görsel verileri.
+  4. Doküman kaydı (doc_registry): İndekslenmiş PDF'lerin listesi.
+
+-----------------------------------------------------------------
+3.8 HİBRİT RETRIEVAL — RRF (Reciprocal Rank Fusion)
+-----------------------------------------------------------------
+Dosya : pipeline/retriever.py
+
+İki arama stratejisi birleştirilerek kullanılır:
+
+  Semantik arama (Qdrant):
+    - Sorgu vektörü ile chunk vektörleri arasında cosine similarity.
+    - "E-stop nasıl kullanılır?" gibi anlamsal sorgularda güçlü.
+
+  Anahtar kelime araması (MongoDB):
+    - $text indeksi ile tam eşleşme veya stemming tabanlı arama.
+    - "SPOT-ENT-001 hata kodu" gibi kodlar için güçlü.
+
+  RRF Füzyon:
+    score_rrf(d) = Σ 1 / (k + rank_i(d))    [k=60, Cormack 2009]
+
+    Her chunk'ın iki listedeki sıralaması bağımsız olarak
+    hesaplanır; toplam RRF skoru en yüksek top_k chunk seçilir.
+
+Otomatik dil tespiti (langdetect):
+  Kullanıcı sorgusunun dili tespit edilir (TR/EN) ve yalnızca
+  o dile ait chunk koleksiyonunda arama yapılır.
+
+-----------------------------------------------------------------
+3.9 LLM / YANIT ÜRETİCİ — Ollama
+-----------------------------------------------------------------
+Sunucu        : Ollama (localhost:11434)
+Metin modeli  : qwen3.5:27b  (.env — aktif kullanılan)
+Görsel modeli : qwen2.5vl:7b (.env — aktif kullanılan)
+Fallback      : qwen3.5:9b   (kod içi otomatik — VRAM yetersizse)
+
+Ollama, büyük dil modellerini yerel GPU üzerinde servis eden
+açık kaynaklı bir çalıştırma çerçevesidir. Projede:
+
+  - Streaming: Yanıtlar token token Streamlit arayüzüne aktarılır.
+  - VRAM yönetimi: Model kullanılmadığında keep_alive=0 ile
+    VRAM'dan boşaltılır; görsel → metin geçişinde otomatik swap.
+  - Fallback: Ollama sunucusu HTTP 500 döndürür ve hata mesajında
+    "memory" geçiyorsa qwen3.5:27b yerine qwen3.5:9b otomatik
+    olarak devreye girer; kullanıcıya arayüzde bilgi notu gösterilir.
+
+Sistem prompt özellikleri:
+  - Yalnızca sağlanan bağlam (context) kullanılarak yanıt verilir.
+  - Adım adım prosedürler numaralı liste, sırasız listeler madde
+    işaretleriyle formatlanır.
+  - Her paragraf sonunda kaynak atıfı (Spot User Manual, p.XX) eklenir.
+  - Türkçe soru → Türkçe yanıt (dil otomatik eşlenir).
+  - Bulunamayan bilgi için sabit bir "not available" cümlesi üretilir.
+
+-----------------------------------------------------------------
+3.10 WEB ARAYÜZÜ — Streamlit
+-----------------------------------------------------------------
+Kütüphane : streamlit >= 1.35.0
+Dosya     : streamlit_app.py
+Uygulama  : RAGORA (localhost:8501)
+
+Streamlit, Python ile hızlı interaktif web uygulaması geliştirmeye
+olanak tanır. Arayüz özellikleri:
+
+  - Sohbet arayüzü (st.chat_input) — metin ve görsel girişi destekler.
+  - Yanıt altında kaynak tablolar (Markdown tablo render).
+  - Yanıt altında ilgili görseller (sayfadan alınan PNG/JPG).
+  - KAYNAKLAR bölümü: hangi belgeden hangi sayfadan alındığı.
+  - Retrieval Detayları genişletilebilir tablo (skor, kaynak, tür).
+  - Sidebar'da indekslenmiş belge listesi (PDF linki ile).
+
+-----------------------------------------------------------------
+3.11 YAPILANDIRMA VE ÇEVRE DEĞİŞKENLERİ
+-----------------------------------------------------------------
+Kütüphane : pydantic-settings >= 2.0.0 + python-dotenv >= 1.0.0
+Dosya     : config/settings.py + .env
+
+Tüm parametreler (model adları, URI'lar, boyutlar, eşikler) tek
+bir Settings sınıfında toplanmıştır. .env dosyasından otomatik
+okunur; değer yoksa kod içi varsayılanlar geçerlidir.
+
+-----------------------------------------------------------------
+3.12 YARDIMCI KÜTÜPHANELER
+-----------------------------------------------------------------
+
+  loguru >= 0.7.0        : Renkli, yapılandırılmış log çıktısı.
+  pydantic >= 2.0.0      : Veri doğrulama ve type-safe veri sınıfları.
+  numpy >= 1.24.0        : Vektör işlemleri (float32 array).
+  tqdm >= 4.66.0         : İndeksleme progress bar'ı.
+  requests >= 2.31.0     : Ollama HTTP API iletişimi.
+  langdetect >= 1.0.9    : Sorgu dili tespiti (TR/EN ayrımı).
+  timm >= 0.9.0          : InternVL2 model bağımlılığı.
+  einops >= 0.7.0        : InternVL2 tensor işlemleri.
+  accelerate >= 0.30.0   : device_map='auto' multi-GPU desteği.
+  pandas                 : Retrieval detayları tablosunu render eder.
+
+
+================================================================
+4. DOCKER ALTYAPISI
+================================================================
+
+Altyapı servisleri docker-compose.yml ile yönetilir:
+
+  Servis          | Image                    | Port
+  ----------------+--------------------------+------------------
+  mongodb         | mongo:7.0                | 27017
+  qdrant          | qdrant/qdrant:v1.13.6    | 6333, 6334
+  mongo-express   | mongo-express:1.0.2      | 8081
+
+  Kalıcı veri: Docker volume (mongo_data, qdrant_data) kullanılır;
+  container yeniden başlatıldığında veriler kaybolmaz.
+
+  Not: Streamlit uygulaması ve Ollama servisi Docker dışında,
+  doğrudan host makine üzerinde Python venv ortamında çalışır.
+
+
+================================================================
+5. GÖRSEL RAG AKIŞI (Multimodal)
+================================================================
+
+Kullanıcı görsel yüklediğinde şu akış işletilir:
+
+  1. CLIP görsel encoder → sorgu vektörü
+     → Qdrant görsel koleksiyonda image_query araması
+     → En benzer görsel chunk'lar (VLM açıklaması + base64 görsel)
+
+  2. Ollama Vision Model (llava:34b) → görseli analiz eder:
+       a. Görüntüdeki tüm yazı/etiketleri listeler.
+       b. Mekanik/teknik detay açıklaması üretir.
+
+  3. VLM açıklaması + kullanıcı sorusu → birleşik metin sorgusu
+     → mE5 metin embedding → Qdrant metin araması
+     → Ek bağlam chunk'ları elde edilir.
+
+  4. Doküman tespiti (hangi Spot aksesuarı?):
+       1. Önce VLM açıklamasındaki anahtar kelimeler kontrol edilir
+          (ör. "gripper" → spot-arm, "dock" → spot-dock).
+       2. Yoksa CLIP eşleşmesindeki en çok geçen doc_name kullanılır.
+       3. Yoksa metin aramasındaki frekans kullanılır.
+
+  5. Tespit edilen belgeye ait chunk'lar + VLM açıklaması → LLM prompt
+     → Ollama → kaynaklı yanıt.
+
+
+================================================================
+6. PROJE DOSYA YAPISI
+================================================================
+
+spot-rag/
+├── parsers/
+│   ├── docling_parser.py      PDF → ParsedElement (Docling + PyMuPDF)
+│   └── visual_parser.py       Görsel chunk çıkarma
+├── chunkers/
+│   └── semantic_chunker.py    ParsedElement → Chunk
+├── embedders/
+│   ├── local_embedder.py      Metin embedding (mE5 / BGE)
+│   └── clip_embedder.py       Görsel/metin embedding (CLIP)
+├── stores/
+│   ├── mongo_store.py         MongoDB CRUD + full-text search
+│   ├── qdrant_store.py        Qdrant CRUD + ANN search
+│   ├── visual_store.py        Görsel chunk store
+│   └── doc_registry.py        İndekslenmiş PDF kaydı
+├── pipeline/
+│   ├── indexer.py             Metin indeksleme pipeline (tek PDF)
+│   ├── multi_indexer.py       Çoklu PDF indeksleme
+│   ├── hybrid_indexer.py      Hibrit indeksleme
+│   ├── retriever.py           Hybrid retrieval + RRF
+│   └── visual_retriever.py    Multimodal retrieval
+├── utils/
+│   └── lang_utils.py          Dil tespiti yardımcı fonksiyonları
+├── config/
+│   └── settings.py            Merkezi ayar yönetimi (pydantic)
+├── streamlit_app.py           Web arayüzü — RAGORA
+├── chatbot.py                 CLI demo
+├── docker-compose.yml         MongoDB + Qdrant + mongo-express
+├── requirements.txt           Python bağımlılıkları
+└── .env                       Çevre değişkenleri (gitignore)
+
+
+================================================================
+7. TEKNOLOJİ YIĞINI ÖZETİ
+================================================================
+
+Katman            | Teknoloji / Model
+------------------+--------------------------------------------
+PDF Ayrıştırma    | Docling 2.x (IBM Research), PyMuPDF (fitz)
+Metin Parçalama   | Özel SemanticChunker (yapısal bölümleme)
+Metin Embedding   | intfloat/multilingual-e5-large (1024 dim)
+Görsel Embedding  | openai/clip-vit-large-patch14 (768 dim)
+Görsel Analiz VLM | llava:34b via Ollama
+Vektör Veritabanı | Qdrant v1.13.6
+Döküman Store     | MongoDB 7.0
+Hibrit Arama      | Qdrant semantic + MongoDB full-text + RRF
+Yanıt Üretici LLM | qwen2.5:32b via Ollama (local, offline)
+Web Arayüzü       | Streamlit >= 1.35.0
+Konteyner         | Docker Compose (MongoDB, Qdrant)
+Dil               | Python 3.12
+Yapılandırma      | Pydantic-Settings + python-dotenv
+Loglama           | Loguru
+
+
+================================================================
+8. ÖNEMLI TASARIM KARARLARI
+================================================================
+
+1. Tamamen yerel çalışma (offline-first):
+   Tüm modeller (embedding, VLM, LLM) yerel GPU üzerinde çalışır.
+   Dış API'ye bağımlılık yoktur; veri gizliliği korunur. Bu özellikle
+   savunma sanayii bağlamında kritik bir gerekliliktir.
+
+2. Docling'in TableFormer modeli:
+   Tablolar düz metin olarak değil; satır/sütun yapısıyla Markdown
+   formatında çıkarılır. Bu sayede "Spot'un ağırlığı nedir?" sorusuna
+   tablo verisindeki tam değer bulunabilmektedir.
+
+3. Breadcrumb bağlamı:
+   Her chunk'a üst başlıkların zinciri (breadcrumb) eklenir. LLM'ye
+   yalnızca chunk metni değil "Safety > Emergency Stop Procedures"
+   gibi konumsal bağlam da iletilir; bu yanıt kalitesini artırır.
+
+4. Dil-agnostik retrieval:
+   mE5-large sayesinde Türkçe sorular İngilizce belgelerde eşleşme
+   bulur; ayrı bir çeviri katmanına gerek yoktur.
+
+5. VRAM yönetimi:
+   Görsel ve metin modelleri sırayla yüklenir; kullanılmayan model
+   keep_alive=0 parametresiyle VRAM'dan boşaltılır. Böylece tek
+   GPU ile hem 34b görsel hem 32b metin modeli çalıştırılabilir.
+
+
+================================================================
+                        --- RAPOR SONU ---
+================================================================

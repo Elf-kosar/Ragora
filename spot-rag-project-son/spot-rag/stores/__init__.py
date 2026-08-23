@@ -1,0 +1,1 @@
+"""Spot project stores package."""

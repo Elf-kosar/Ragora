@@ -59,10 +59,23 @@ services:
       - "8501:8501"
     environment:
       MONGODB_URI: mongodb://mongo:27017/
+      SPOT_MONGODB_URI: mongodb://mongo:27017/
+      SPOT_MONGODB_DB_NAME: ${SPOT_MONGODB_DB_NAME:-Ragora}
+      SPOT_MONGODB_COLLECTION: ${SPOT_MONGODB_COLLECTION:-spot_collection}
+      MONGO_URI: mongodb://mongo:27017/
+      MONGO_DB: ${SPOT_MONGODB_DB_NAME:-Ragora}
+      MONGO_COLLECTION: ${SPOT_MONGODB_COLLECTION:-spot_collection}
       QDRANT_MODE: server
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
+      SPOT_QDRANT_COLLECTION: ${SPOT_QDRANT_COLLECTION:-spot_chunks}
+      QDRANT_COLLECTION: ${SPOT_QDRANT_COLLECTION:-spot_chunks}
+      VISUAL_MONGO_COLLECTION: ${SPOT_VISUAL_MONGODB_COLLECTION:-spot_visual_collection}
+      VISUAL_QDRANT_COLLECTION: ${SPOT_VISUAL_QDRANT_COLLECTION:-spot_visual_chunks}
+      EMBED_MODEL: ${EMBED_MODEL:-intfloat/multilingual-e5-large}
+      EMBED_DEVICE: ${EMBED_DEVICE:-cpu}
       OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}
       VISION_RETRIEVAL_MODE: ${VISION_RETRIEVAL_MODE:-clip}
@@ -73,7 +86,43 @@ services:
       TRANSFORMERS_CACHE: /root/.cache/huggingface
     volumes:
       - ./data:/app/data
+      - ./spot-rag-project-son/spot-rag:/app/spot-rag-project-son/spot-rag:ro
+      - ./spot-rag-project-son/spot-rag/data/pdfs:/app/chatbot/static/spot-pdfs:ro
       - hf_cache:/root/.cache/huggingface
+
+  spot-indexer:
+    build: .
+    profiles:
+      - tools
+    depends_on:
+      mongo:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/
+      SPOT_MONGODB_URI: mongodb://mongo:27017/
+      SPOT_MONGODB_DB_NAME: ${SPOT_MONGODB_DB_NAME:-Ragora}
+      SPOT_MONGODB_COLLECTION: ${SPOT_MONGODB_COLLECTION:-spot_collection}
+      MONGO_URI: mongodb://mongo:27017/
+      MONGO_DB: ${SPOT_MONGODB_DB_NAME:-Ragora}
+      MONGO_COLLECTION: ${SPOT_MONGODB_COLLECTION:-spot_collection}
+      QDRANT_MODE: server
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      SPOT_QDRANT_COLLECTION: ${SPOT_QDRANT_COLLECTION:-spot_chunks}
+      QDRANT_COLLECTION: ${SPOT_QDRANT_COLLECTION:-spot_chunks}
+      VISUAL_MONGO_COLLECTION: ${SPOT_VISUAL_MONGODB_COLLECTION:-spot_visual_collection}
+      VISUAL_QDRANT_COLLECTION: ${SPOT_VISUAL_QDRANT_COLLECTION:-spot_visual_chunks}
+      EMBED_MODEL: ${EMBED_MODEL:-intfloat/multilingual-e5-large}
+      EMBED_DEVICE: ${EMBED_DEVICE:-cpu}
+      HF_HOME: /root/.cache/huggingface
+      TRANSFORMERS_CACHE: /root/.cache/huggingface
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - ./spot-rag-project-son/spot-rag:/app/spot-rag-project-son/spot-rag:ro
+    command: ["python", "scripts/index_spot_native.py", "--mode", "hybrid", "--force"]
+    restart: "no"
 
 volumes:
   mongo_data:
