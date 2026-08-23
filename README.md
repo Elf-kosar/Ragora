@@ -255,9 +255,3 @@ Ragora-Web/
 - İlk embedding veya CLIP kullanımı sırasında Hugging Face model dosyaları
   indirilebilir.
 
-## Güvenlik notu
-
-Retrieval ile alınan doküman içeriği güvenilmeyen veri kabul edilir. Uygulama,
-bağlam içindeki talimatları çalıştırmamak ve yanıtı yalnızca teknik kanıtlarla
-sınırlamak üzere koruma katmanları içerir. Buna rağmen üretim ortamında ağ
-erişimini, model servislerini ve veri tabanı yetkilerini ayrıca sınırlandırın.
